@@ -53,12 +53,1418 @@ This ongoing experiment tests multiple model architectures (Dense vs. MoE) acros
 
 ## 🛠️ How to Run the Analysis Scripts
 
-### Internal Repetition Rate (`bookdiff.py`)
-Requires Python 3.x. Evaluates overlapping 10-word n-gram windows to detect phrase loops and structural repetition:
+🛠️ Detailed Script Manuals & Instructions
+# Can AI Write a Book?
+
+Longform local-LLM benchmark data and analysis tools for the "Can AI Write a Book?" experiment by Jessica K. Murray.
+
+This project explores a deceptively simple question:
+
+**Can a local, open-weights language model actually generate a coherent novel-length manuscript on ordinary consumer hardware?**
+
+The benchmark looks beyond whether a model can produce 90,000 words. It measures what happens over the full length of a book: generation speed, target-length adherence, repetition, phrase recycling, truncation, drift, and the amount of AI-generated prose that survives later human editing.
+
+The experiments use BookyAI as the longform generation wrapper and Ollama as the local inference backend.
+
+## Repository Tools
+
+The repository includes two small analysis utilities:
+
+| Script             | Purpose                                                                                 | Platform              |
+| ------------------ | --------------------------------------------------------------------------------------- | --------------------- |
+| `bookdiff.py`      | Measures internal repetition, chapter drift, and AI-draft carryover after human editing | Windows, macOS, Linux |
+| `chaptertimes.ps1` | Reconstructs approximate chapter generation times from BookyAI output-file timestamps   | Windows PowerShell    |
+
+Neither script sends manuscript text anywhere. Analysis is performed locally.
+
+---
+
+# Getting Started
+
+Clone the repository:
 
 ```bash
-# Analyze full file (including back matter)
-python bookdiff.py repetition "runs/A3b_boo-4070_qwen3-8b_thinking-OFF/4070 - The Affirmation Glitch - qwen3:8b - NO thinking.md"
+git clone https://github.com/HelloJessicaM/Can-AI-Write-a-Book.git
+cd Can-AI-Write-a-Book
+```
+
+You can also download the repository as a ZIP from GitHub and extract it normally.
+
+## Requirements
+
+### For `bookdiff.py`
+
+You need:
+
+* Python 3.8 or newer
+* A plain-text or Markdown manuscript
+* No third-party Python libraries
+
+Check your Python installation with:
+
+```bash
+python --version
+```
+
+or:
+
+```bash
+python3 --version
+```
+
+On Windows, you may also have the Python launcher:
+
+```powershell
+py --version
+```
+
+No `pip install` step is required.
+
+### For `chaptertimes.ps1`
+
+You need:
+
+* Windows
+* PowerShell
+* The original individual chapter files produced during the BookyAI generation run
+* Their original `LastWriteTime` timestamps intact
+
+No PowerShell modules or other dependencies are required.
+
+The timing script should ideally be run immediately after a generation completes, before editing the chapter files or otherwise doing anything that might modify their timestamps.
+
+---
+
+# `bookdiff.py`
+
+`bookdiff.py` performs two different kinds of manuscript analysis:
+
+1. `repetition` analyzes a single manuscript for repeated text and chapter drift.
+2. `compare` compares an AI-generated draft against a later edited manuscript and estimates how much original AI wording remains.
+
+General syntax:
+
+```bash
+python bookdiff.py MODE [files] [options]
+```
+
+You can see built-in help at any time:
+
+```bash
+python bookdiff.py --help
+```
+
+For help with an individual mode:
+
+```bash
+python bookdiff.py repetition --help
+```
+
+```bash
+python bookdiff.py compare --help
+```
+
+If your system uses `python3` or `py` instead of `python`, substitute that command in all examples below.
+
+---
+
+# 1. Measuring Repetition in a Manuscript
+
+Basic command:
+
+```bash
+python bookdiff.py repetition manuscript.md
+```
+
+For example:
+
+```bash
+python bookdiff.py repetition "The Affirmation Glitch.md"
+```
+
+Always put paths in quotes if they contain spaces.
+
+The script reads the entire manuscript and analyzes overlapping **10-word windows**, also called 10-word n-grams.
+
+For a sequence like:
+
+```text
+the old house stood at the end of the empty road
+```
+
+the script records that 10-word sequence, moves forward one word, records the next 10-word sequence, and continues through the manuscript.
+
+It then asks how many of those windows occur more than once.
+
+## Example output
+
+A report begins approximately like this:
+
+```text
+========================================================================
+REPETITION REPORT
+  manuscript.md   (89,758 words, 40 chapters)
+========================================================================
+
+  Internal repetition: 45.4% of 10-word windows appear more than once
+```
+
+The exact numbers depend on the manuscript.
+
+## What "Internal repetition" means
+
+If the report says:
+
+```text
+Internal repetition: 12.5%
+```
+
+that means 12.5 percent of the manuscript's overlapping 10-word windows belong to sequences that appear more than once.
+
+This is designed to detect the kind of phrase recycling that can emerge during very long LLM generations.
+
+It is **not** a plagiarism score, AI detector, writing-quality score, or universal threshold for whether a book is "too repetitive."
+
+Normal novels repeat language too.
+
+Dialogue tags, character names, deliberate refrains, recurring descriptions, quotations, ritual language, poetry, and stylistic motifs can all increase the number.
+
+For that reason, the most useful approach is comparative.
+
+Run the tool on:
+
+* multiple outputs from different models;
+* different settings for the same model;
+* edited versus unedited manuscripts;
+* traditionally written novels or other texts you consider reasonable baselines.
+
+The benchmark becomes much more meaningful when the same measurement is used consistently across texts.
+
+---
+
+# Repeated-Passage Report
+
+When sufficiently repeated material exists, `bookdiff.py` also prints up to ten distinct highly repeated passages.
+
+Example:
+
+```text
+Most-repeated passages (distinct):
+
+  windows    find   passage
+  --------------------------------------------------------------------
+       37       4   she looked at him and did not know what to
+```
+
+There are two columns because repetition can be counted in different ways.
+
+### `windows`
+
+This measures overlapping 10-word windows.
+
+A long repeated paragraph can produce many overlapping repeated windows even if the paragraph itself only occurs a few times.
+
+### `find`
+
+This approximates the number of times the displayed passage itself occurs as a searchable string.
+
+This is closer to what you would see by copying the displayed phrase and searching for it in an editor.
+
+The distinction is useful because a long passage repeated four times may generate dozens of overlapping repeated windows.
+
+The tool also tries to avoid filling the report with slightly shifted versions of the same repeated passage. Candidate windows sharing at least five consecutive tokens are treated as belonging to the same repetition run.
+
+Only passages occurring more than twice are candidates for this top repeated-passages list.
+
+---
+
+# Chapter Drift
+
+If the script successfully detects at least three chapters, it also produces a drift table:
+
+```text
+Drift check:
+
+    ch    words   vs ch1  self-rep
+  ---------------------------------
+     1    2,315     0.0%      1.2%
+     2    2,184     0.1%      1.5%
+     3    2,407     0.2%      2.0%
+```
+
+### `vs ch1`
+
+This measures how many distinct 10-word windows in that chapter also occur in Chapter 1.
+
+A small amount of overlap is normal.
+
+What is more interesting in a long-generation benchmark is a pattern in which later chapters increasingly overlap Chapter 1.
+
+For example:
+
+```text
+Chapter 5     0.2%
+Chapter 15    0.5%
+Chapter 25    2.8%
+Chapter 35    8.7%
+```
+
+That pattern can indicate that the model is increasingly recycling earlier material as the generation continues.
+
+### `self-rep`
+
+This measures repeated 10-word windows **within that individual chapter**.
+
+This can help distinguish whole-book repetition from a particular chapter that became unusually repetitive.
+
+---
+
+# Analyzing Narrative Chapters Only
+
+By default, repetition analysis includes the text supplied to the script.
+
+To focus on recognized narrative chapters and remove front/back matter, use:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapters-only
+```
+
+For example:
+
+```bash
+python bookdiff.py repetition "The Affirmation Glitch.md" --chapters-only
+```
+
+This is useful when comparing novel-generation runs because acknowledgments, appendices, author notes, discussion questions, and other non-narrative material can distort repetition statistics.
+
+The script recognizes several back-matter headings, including forms of:
+
+* Epilogue
+* Afterword
+* Endnotes
+* Glossary
+* Appendix
+* Appendices
+* Further Reading
+* Discussion Guide
+* Acknowledgments
+* About the Author
+* A Note to Readers
+* Reader Thanks
+* Bibliography
+* Index
+
+Important: **`Epilogue` is treated as back matter by the current script.**
+
+If your epilogue is part of the narrative and you want it included in the repetition measurement, do not use `--chapters-only` without modifying the script.
+
+---
+
+# Saving the Repetition Report
+
+Instead of printing the report only in the terminal, save it to a text file:
+
+```bash
+python bookdiff.py repetition manuscript.md --out repetition-report.txt
+```
+
+You can combine options:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapters-only --out repetition-report.txt
+```
+
+The script will confirm:
+
+```text
+Report written to repetition-report.txt
+```
+
+This is useful for keeping benchmark results with individual model runs.
+
+---
+
+# Chapter Detection
+
+`bookdiff.py` automatically looks for common chapter headings.
+
+Supported default patterns include headings such as:
+
+```markdown
+# Chapter 1
+## Chapter 1
+### Chapter 1
+```
+
+or:
+
+```text
+Chapter 1
+```
+
+or:
+
+```text
+CHAPTER 1
+CHAPTER IV
+CHAPTER XII
+```
+
+It also recognizes Markdown headings consisting only of a chapter number, such as:
+
+```markdown
+## 1
+```
+
+The script requires at least **three matching chapter headings** before treating the manuscript as chapter-structured.
+
+If fewer than three headings are detected, the manuscript is analyzed as one whole file.
+
+In that case, you will not receive the normal chapter-by-chapter drift report.
+
+---
+
+# Custom Chapter Headings
+
+If your book uses a different heading format, provide a regular expression with `--chapter-regex`.
+
+For example:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapter-regex "^CHAPTER"
+```
+
+Or:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapter-regex "^Part [0-9]+"
+```
+
+Or:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapter-regex "^## Scene [0-9]+"
+```
+
+Important: a custom chapter regex **replaces** the built-in chapter patterns for that run. It is not added to them.
+
+The custom expression must also identify at least three headings for chapter-based analysis to activate.
+
+---
+
+# Text Normalization
+
+The script performs limited normalization so that typography does not create artificial differences.
+
+Among other things, it normalizes:
+
+* curly and straight quotation marks;
+* curly apostrophes;
+* em dashes and en dashes;
+* ellipses;
+* non-breaking spaces;
+* Markdown emphasis characters such as `*`, `_`, and backticks;
+* repeated whitespace.
+
+Comparison is also case-insensitive at the token level.
+
+As a result, changing:
+
+```text
+She couldn't believe it.
+```
+
+to a typographically different version using curly quotation marks does not make the passage appear newly written.
+
+The goal is to measure meaningful textual changes rather than formatting changes.
+
+---
+
+# 2. Comparing an AI Draft With an Edited Manuscript
+
+The second mode measures how much text from an original AI draft survives in a later edited version.
+
+Syntax:
+
+```bash
+python bookdiff.py compare AI_DRAFT EDITED_MANUSCRIPT
+```
+
+Example:
+
+```bash
+python bookdiff.py compare "original-ai-draft.md" "edited-manuscript.md"
+```
+
+The order matters.
+
+The first file must be the original AI-generated manuscript:
+
+```text
+AI draft -> first argument
+Edited version -> second argument
+```
+
+---
+
+# Carryover Measurements
+
+The comparison produces two main measurements.
+
+## Identical-sentence carryover
+
+Example:
+
+```text
+38.7% of sentences are word-for-word the AI's
+```
+
+The script normalizes case, punctuation, common typography, and Markdown before determining whether a sentence matches the AI draft.
+
+Therefore, "word-for-word" here means essentially the same normalized sequence of words, rather than byte-for-byte identical text.
+
+A sentence whose punctuation was changed but whose wording remains the same will generally still count as a match.
+
+A substantially rewritten sentence will not.
+
+## 10-word-window carryover
+
+Example:
+
+```text
+52.4% of 10-word windows appear in the AI draft
+```
+
+This measurement is more sensitive to partial editing.
+
+Imagine an AI-generated sentence:
+
+```text
+Emma walked slowly across the kitchen and looked through the window.
+```
+
+If the edited version changes only a few words, the complete sentence may no longer count as identical.
+
+However, substantial runs of unchanged wording can still produce matching 10-word windows.
+
+For this reason, the window percentage will often be higher than the identical-sentence percentage.
+
+Together, the two numbers provide a more useful picture than either metric alone.
+
+---
+
+# Chapter-by-Chapter Carryover
+
+When chapters are detected in both files, the comparison produces a table similar to:
+
+```text
+  ch    words  sentences   windows   status
+------------------------------------------------------------------------
+   1    2,814      82.1%     88.5%   mostly AI
+   2    2,631      64.7%     73.3%   heavily edited
+   3    2,907      41.8%     55.2%   mostly yours
+```
+
+The `sentences` column is the percentage of sentences in the edited chapter whose normalized wording also occurs in the corresponding AI chapter.
+
+The `windows` column measures 10-word overlap.
+
+The script also assigns descriptive labels based on sentence carryover:
+
+| Identical sentence rate | Label            |
+| ----------------------- | ---------------- |
+| 75% or higher           | `mostly AI`      |
+| 60% to under 75%        | `heavily edited` |
+| 45% to under 60%        | `part rewritten` |
+| Under 45%               | `mostly yours`   |
+
+These labels are convenient benchmark shorthand built into the script. They should **not** be interpreted as legal, publishing-industry, copyright, or philosophical definitions of authorship.
+
+The underlying percentages are the meaningful measurements.
+
+---
+
+# Comparing Manuscripts With Different Chapter Counts
+
+The comparison does not attempt semantic chapter alignment.
+
+If the AI draft contains 40 chapters and the edited book contains 42, the script reports the mismatch and compares the first 40 chapters in order.
+
+Conceptually:
+
+```text
+AI Chapter 1 -> Edited Chapter 1
+AI Chapter 2 -> Edited Chapter 2
+AI Chapter 3 -> Edited Chapter 3
+...
+```
+
+It does not attempt to determine that an edited Chapter 12 was split from an original Chapter 11, for example.
+
+If editing substantially changes chapter structure, whole-book window carryover remains useful, but chapter-level sentence percentages should be interpreted cautiously.
+
+---
+
+# Saving a Carryover Report
+
+Use `--out`:
+
+```bash
+python bookdiff.py compare "ai-draft.md" "edited.md" --out carryover-report.txt
+```
+
+Custom chapter detection works in comparison mode too:
+
+```bash
+python bookdiff.py compare "ai-draft.md" "edited.md" --chapter-regex "^CHAPTER" --out carryover-report.txt
+```
+
+The same custom chapter regex is applied to both manuscripts.
+
+---
+
+# What `bookdiff.py` Is Not
+
+The script is intentionally simple and transparent.
+
+It is not:
+
+* a machine-learning AI detector;
+* a plagiarism checker;
+* a semantic-similarity model;
+* an authorship classifier;
+* a copyright determination;
+* a quality score;
+* an attempt to determine whether prose "sounds AI."
+
+It measures observable text overlap.
+
+That makes it useful for controlled experiments where the original AI draft is available.
+
+For example, if an author starts with a generated manuscript and spends several editing passes rewriting it, `compare` can quantitatively show how much exact or near-exact generated language remains after each pass.
+
+---
+
+# Recommended Carryover Experiment
+
+If you are studying human editing of AI prose, save multiple manuscript versions:
+
+```text
+draft-00-ai-original.md
+draft-01-light-edit.md
+draft-02-developmental-edit.md
+draft-03-line-edit.md
+draft-04-final.md
+```
+
+Then compare every version against the unchanged original AI output:
+
+```bash
+python bookdiff.py compare draft-00-ai-original.md draft-01-light-edit.md
+python bookdiff.py compare draft-00-ai-original.md draft-02-developmental-edit.md
+python bookdiff.py compare draft-00-ai-original.md draft-03-line-edit.md
+python bookdiff.py compare draft-00-ai-original.md draft-04-final.md
+```
+
+Do **not** compare each revision only against the immediately preceding revision if your research question is "How much of the original AI prose remains?"
+
+The AI draft should remain the fixed baseline.
+
+---
+
+# `chaptertimes.ps1`
+
+`chaptertimes.ps1` analyzes the timestamps of individual BookyAI chapter files to estimate how long each chapter took to generate.
+
+Unlike `bookdiff.py`, this utility should be considered part of the **data-capture stage** of a benchmark.
+
+Run it while the original output-file timestamps are still trustworthy.
+
+---
+
+# Why File Timestamps Matter
+
+BookyAI writes individual chapter files during generation.
+
+If chapters are generated sequentially, the difference between the completion timestamp of one chapter and the completion timestamp of the next can be used as an approximation of the later chapter's generation time.
+
+For example:
+
+```text
+Chapter 1 finished: 10:00:00
+Chapter 2 finished: 10:02:30
+Chapter 3 finished: 10:05:10
+```
+
+The script interprets this approximately as:
+
+```text
+Chapter 2: 150 seconds
+Chapter 3: 160 seconds
+```
+
+There is no timing measurement for Chapter 1 because there is no preceding chapter timestamp from which to calculate its generation interval.
+
+This is why the script reports the wall-clock span from the completion of Chapter 1 through the completion of the final chapter rather than claiming to know the exact beginning of the entire run.
+
+---
+
+# Important: Run Timing Analysis Before Editing Files
+
+`chaptertimes.ps1` relies on each file's filesystem `LastWriteTime`.
+
+Editing and resaving a chapter will change that timestamp.
+
+Some copying, synchronization, archive extraction, cloud-storage, restoration, or file-management workflows may also alter timestamps.
+
+For benchmark-quality data, the safest procedure is:
+
+1. Allow BookyAI to finish the generation.
+2. Do not edit the chapter files.
+3. Open PowerShell.
+4. Run `chaptertimes.ps1` against the original output directory.
+5. Save the generated timing CSV with the benchmark run.
+6. Only then move, rename, edit, or reorganize the manuscript files.
+
+If you no longer trust the timestamps, do not treat reconstructed chapter timing as benchmark data.
+
+---
+
+# Running `chaptertimes.ps1`
+
+First change into the BookyAI output directory containing the individual chapter files:
+
+```powershell
+cd "C:\path\to\bookyai\output"
+```
+
+If the script itself is in that directory:
+
+```powershell
+.\chaptertimes.ps1 -RunId A2
+```
+
+If Windows blocks script execution, you can allow it for only the current PowerShell process:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\chaptertimes.ps1 -RunId A2
+```
+
+This does not require permanently changing the execution policy.
+
+Alternatively, keep `chaptertimes.ps1` in the cloned GitHub repository and invoke it from the BookyAI output directory:
+
+```powershell
+cd "C:\path\to\bookyai\output"
+
+& "C:\path\to\Can-AI-Write-a-Book\chaptertimes.ps1" -RunId A2
+```
+
+This is often cleaner because the analysis script stays in the repository while the current working directory remains the run directory.
+
+---
+
+# `-RunId`
+
+`RunId` labels the benchmark run.
+
+Example:
+
+```powershell
+.\chaptertimes.ps1 -RunId A3b
+```
+
+The value is written into every CSV row and determines the output filename:
+
+```text
+A3b_timings.csv
+```
+
+If no `RunId` is supplied, the default is:
+
+```text
+run
+```
+
+which creates:
+
+```text
+run_timings.csv
+```
+
+For reproducible benchmark work, always provide an explicit run ID.
+
+---
+
+# Selecting Chapter Files With `-Pattern`
+
+By default, the script examines:
+
+```text
+*.md
+```
+
+in the current directory.
+
+You can restrict the files using `-Pattern`.
+
+For example:
+
+```powershell
+.\chaptertimes.ps1 -RunId A3b -Pattern "chapter*.md"
+```
+
+or:
+
+```powershell
+.\chaptertimes.ps1 -RunId A3b -Pattern "*Chapter*.md"
+```
+
+This can be useful if the output folder contains other Markdown files that are not generated chapters.
+
+The script automatically excludes filenames containing:
+
+```text
+outline
+summary
+character
+appendix
+reference
+```
+
+However, other unrelated `.md` files could still be included.
+
+For clean benchmark data, inspect the file list or use a restrictive `-Pattern` if the directory contains additional Markdown files.
+
+At least two matching chapter files are required.
+
+Otherwise the script exits with:
+
+```text
+Found fewer than 2 chapter files. Check the folder and -Pattern.
+```
+
+---
+
+# How Chapter Order Is Determined
+
+The timing script does **not** sort chapters by filename.
+
+It sorts them by:
+
+```text
+LastWriteTime
+```
+
+This is intentional.
+
+The purpose is to reconstruct generation chronology rather than alphabetical file order.
+
+This also means that manually editing a chapter after generation can move it to the end of the timestamp sequence and invalidate the analysis.
+
+---
+
+# Timing CSV Columns
+
+The script creates:
+
+```text
+<RunId>_timings.csv
+```
+
+with these columns:
+
+| Column      | Meaning                                                  |
+| ----------- | -------------------------------------------------------- |
+| `RunId`     | Benchmark run identifier supplied with `-RunId`          |
+| `File`      | Chapter filename                                         |
+| `Finished`  | File's `LastWriteTime`, formatted as date and local time |
+| `Seconds`   | Seconds since the preceding chapter file's completion    |
+| `Words`     | Whitespace-based word count                              |
+| `Tokens`    | Estimated token count                                    |
+| `TokPerSec` | Estimated tokens divided by the timestamp interval       |
+| `Truncated` | Heuristic indication that the chapter may end abruptly   |
+
+The first chapter has no value for `Seconds` or `TokPerSec` because there is no previous chapter timestamp.
+
+---
+
+# Token Estimates
+
+The script estimates:
+
+```text
+tokens = words x 1.33
+```
+
+This is deliberately a rough rule of thumb.
+
+It does **not** run the manuscript through the model's tokenizer and does not retrieve actual Ollama token telemetry.
+
+Different models and tokenizers can produce substantially different token-to-word ratios, especially with:
+
+* code;
+* unusual punctuation;
+* non-English text;
+* fragmented output;
+* special tokens;
+* reasoning traces;
+* Markdown-heavy content.
+
+For this reason, `TokPerSec` should be interpreted as an internally consistent **estimated throughput metric**, not an exact tokenizer-level benchmark.
+
+If exact inference throughput is required, use actual runtime/model telemetry instead.
+
+---
+
+# Understanding `Seconds`
+
+For every chapter after the first:
+
+```text
+Seconds = current chapter LastWriteTime - previous chapter LastWriteTime
+```
+
+If generation is continuous and sequential, this is a useful approximation of chapter generation time.
+
+However, the number can also include anything that occurred between file completions.
+
+For example:
+
+* model-loading delays;
+* wrapper overhead;
+* pauses;
+* retries;
+* human intervention;
+* system stalls;
+* other processing performed between chapters.
+
+This benchmark therefore measures **observed wall-clock output cadence**, not pure GPU inference time.
+
+That distinction is important when comparing these results with inference engines that report token generation speed directly.
+
+---
+
+# Truncation Detection
+
+The timing script performs a simple truncation check.
+
+A chapter is considered likely complete if its final non-whitespace character is one of several common terminal punctuation characters, such as:
+
+```text
+.
+!
+?
+"
+'
+)
+]
+```
+
+Otherwise:
+
+```text
+Truncated = YES
+```
+
+This is a heuristic.
+
+A chapter ending abruptly in the middle of a sentence is likely to be correctly flagged.
+
+But false positives and false negatives are possible.
+
+For example, deliberately ending a chapter with:
+
+```text
+To be continued
+```
+
+would be flagged even if that ending was intentional.
+
+A generation could also end incorrectly immediately after a period and escape detection.
+
+Treat `Truncated = YES` as a prompt for manual inspection rather than definitive proof.
+
+---
+
+# Timing Summary
+
+After writing the CSV, the script prints a run summary similar to:
+
+```text
+==================== A3b ====================
+  chapters              : 40
+  wall clock (ch1->end) : 26.9 min
+  total words           : 89,758
+  overall tok/sec       : 74.00
+  median chapter        : 39.2s
+  slowest chapter       : 61.7s
+  likely truncated      : 2
+  target adherence      : 100% of 90,000
+================================================
+```
+
+## `chapters`
+
+Number of matching chapter files.
+
+## `wall clock (ch1->end)`
+
+Elapsed time between the completion timestamp of the first chapter and the completion timestamp of the final chapter.
+
+This is **not** the complete start-to-finish generation time because the script does not know when Chapter 1 began.
+
+## `total words`
+
+Total whitespace-separated words across all included files.
+
+## `overall tok/sec`
+
+Estimated total tokens divided by the measured Chapter-1-completion-to-final-completion interval.
+
+Because Chapter 1's token estimate is included while its generation interval is unavailable, this should be regarded as an approximate comparative statistic rather than exact end-to-end throughput.
+
+## `median chapter`
+
+Approximate middle chapter-generation interval among chapters with measurable timing.
+
+## `slowest chapter`
+
+Longest interval between consecutive chapter completion timestamps.
+
+## `likely truncated`
+
+Number of files flagged by the terminal-punctuation heuristic.
+
+## `target adherence`
+
+Total word count as a percentage of:
+
+```text
+90,000 words
+```
+
+The 90,000-word benchmark target is currently hard-coded in the PowerShell script.
+
+For example:
+
+```text
+45,000 words = 50%
+90,000 words = 100%
+135,000 words = 150%
+180,000 words = 200%
+```
+
+If you use `chaptertimes.ps1` for a project with a different target length, either interpret this value accordingly or modify the `90000` constant in the summary calculation.
+
+---
+
+# Recommended Benchmark Workflow
+
+For a complete BookyAI/Ollama benchmark run, a reproducible workflow is:
+
+### 1. Record the configuration
+
+Before starting, record information such as:
+
+```text
+run ID
+model
+quantization
+thinking/reasoning setting
+hardware
+system RAM
+GPU VRAM
+prompt version
+target word count
+BookyAI settings
+Ollama version
+```
+
+### 2. Run the generation
+
+Allow the BookyAI run to finish without modifying completed chapter files.
+
+### 3. Capture timing immediately
+
+From the original chapter-output directory:
+
+```powershell
+& "C:\path\to\Can-AI-Write-a-Book\chaptertimes.ps1" -RunId A3b
+```
+
+Preserve:
+
+```text
+A3b_timings.csv
+```
+
+with the run.
+
+### 4. Assemble or export the manuscript
+
+Create the complete raw Markdown or text manuscript without rewriting it.
+
+### 5. Measure repetition
+
+```bash
+python bookdiff.py repetition "raw-manuscript.md" --chapters-only --out repetition.txt
+```
+
+### 6. Inspect repeated passages
+
+Do not rely only on the percentage.
+
+Review the repeated-passages list to distinguish genuine model looping from intentional recurring language.
+
+### 7. Preserve the raw output
+
+Never overwrite the original generated manuscript if you intend to study later editing.
+
+Keep it as an immutable baseline.
+
+### 8. Edit a copy
+
+For example:
+
+```text
+A3b_raw.md
+A3b_edited.md
+```
+
+### 9. Measure human-edit carryover
+
+```bash
+python bookdiff.py compare "A3b_raw.md" "A3b_edited.md" --out A3b_carryover.txt
+```
+
+This produces a reproducible quantitative record of how much original generated language survived the editing process.
+
+---
+
+# Recommended Run Directory
+
+One possible organization is:
+
+```text
+runs/
+└── A3b_model-name/
+    ├── raw/
+    │   ├── chapter-01.md
+    │   ├── chapter-02.md
+    │   └── ...
+    ├── manuscript.md
+    ├── A3b_timings.csv
+    ├── repetition.txt
+    ├── metadata.md
+    └── edited/
+        ├── manuscript-edited.md
+        └── carryover.txt
+```
+
+The exact directory structure is not required by either script.
+
+The important thing is to preserve raw outputs and keep benchmark results associated with the correct run.
+
+---
+
+# Comparing Models Fairly
+
+These tools are most useful when the surrounding experiment is controlled.
+
+If comparing models, try to keep constant:
+
+* generation prompt;
+* BookyAI version and settings;
+* chapter pipeline;
+* requested book length;
+* reasoning/thinking configuration where appropriate;
+* repetition-analysis settings;
+* inclusion or exclusion of back matter;
+* chapter-detection rules.
+
+Hardware differences should be explicitly recorded rather than hidden.
+
+For repetition comparisons, run every manuscript using the same command.
+
+For example:
+
+```bash
+python bookdiff.py repetition model-a.md --chapters-only
+python bookdiff.py repetition model-b.md --chapters-only
+python bookdiff.py repetition model-c.md --chapters-only
+```
+
+Do not analyze one book with back matter included and another with `--chapters-only` and treat the percentages as directly equivalent.
+
+---
+
+# Troubleshooting
+
+## `python` is not recognized
+
+Try:
+
+```bash
+python3 bookdiff.py --help
+```
+
+or on Windows:
+
+```powershell
+py bookdiff.py --help
+```
+
+If none works, install Python 3 before using `bookdiff.py`.
+
+---
+
+## My manuscript is treated as one chapter
+
+Your chapter headings probably do not match the default patterns.
+
+Use:
+
+```bash
+python bookdiff.py repetition manuscript.md --chapter-regex "YOUR_REGEX"
+```
+
+Also remember that at least three headings must match.
+
+---
+
+## I don't see a drift report
+
+The script only produces chapter drift when more than two chapters are successfully detected.
+
+Check the line near the beginning of the report:
+
+```text
+(90,000 words, 1 chapters)
+```
+
+If it says `1 chapters`, chapter detection failed and the whole file was analyzed as one unit.
+
+---
+
+## `--chapters-only` removed my epilogue
+
+That is expected in the current implementation.
+
+`Epilogue` is one of the headings treated as back matter.
+
+Run without `--chapters-only` if you want the epilogue included, or modify the `BACK_MATTER` regular expression in `bookdiff.py`.
+
+---
+
+## My carryover results look unexpectedly high
+
+Check whether the edited manuscript actually contains long sections copied unchanged from the AI draft.
+
+The 10-word-window metric intentionally detects partially edited sentences and unchanged stretches of prose.
+
+Also make sure you supplied the files in the correct order:
+
+```bash
+python bookdiff.py compare AI_DRAFT EDITED_VERSION
+```
+
+---
+
+## My carryover chapter table is misaligned
+
+If chapters were inserted, deleted, merged, or split during editing, positional comparison may no longer represent equivalent chapters.
+
+The script pairs chapters by order.
+
+For heavily restructured books, give greater weight to the whole-book carryover numbers or prepare aligned versions specifically for chapter-level comparison.
+
+---
+
+## PowerShell says script execution is disabled
+
+From the current PowerShell session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Then run:
+
+```powershell
+.\chaptertimes.ps1 -RunId A3b
+```
+
+The `Process` scope limits the change to that PowerShell session.
+
+---
+
+## `chaptertimes.ps1` finds too many Markdown files
+
+Use a narrower pattern:
+
+```powershell
+.\chaptertimes.ps1 -RunId A3b -Pattern "chapter*.md"
+```
+
+The default `*.md` pattern intentionally allows different BookyAI filename conventions, but that means unrelated Markdown files can be included if they are in the same directory and do not match the built-in exclusion terms.
+
+---
+
+## The chapters are in the wrong order
+
+The script sorts files by `LastWriteTime`, not filename.
+
+If the timestamps no longer represent the original generation order, the timing data has probably been altered.
+
+Do not rename or manually sort the CSV and then treat it as reconstructed generation telemetry.
+
+The chronological timestamps are the measurement.
+
+---
+
+## One chapter shows an enormous generation time
+
+Inspect what happened between the two corresponding file completion timestamps.
+
+The interval may contain:
+
+* a paused generation;
+* system sleep;
+* a retry;
+* model loading;
+* a stalled process;
+* human interaction;
+* another interruption.
+
+The script cannot distinguish those events from inference time.
+
+Preserve the result but annotate the benchmark run if you know why the outlier occurred.
+
+---
+
+## Token speed does not match Ollama's reported speed
+
+That is expected.
+
+`chaptertimes.ps1` estimates tokens as:
+
+```text
+words x 1.33
+```
+
+and divides that estimate by filesystem timestamp intervals.
+
+Ollama can report actual tokenizer/runtime statistics.
+
+These are different measurements and should not be presented as interchangeable.
+
+---
+
+# Data Interpretation
+
+The project intentionally separates several questions that are often collapsed into the vague question, "Can AI write a book?"
+
+A model can successfully generate 90,000 words while still performing poorly in other dimensions.
+
+Useful benchmark dimensions include:
+
+```text
+Length adherence
+Generation time
+Observed throughput
+Truncation
+Internal repetition
+Cross-chapter drift
+Structural coherence
+Raw output quality
+Human editing required
+AI-language carryover after editing
+```
+
+For example, a manuscript that hits exactly 90,000 words but has a 45 percent repetition rate represents a very different result from a manuscript of the same length with little phrase recycling.
+
+Likewise, an AI draft that appears polished but ultimately requires nearly every sentence to be rewritten represents a different form of success or failure than one that survives editing largely intact.
+
+The purpose of these scripts is to make some of those differences measurable.
+
+---
+
+# Privacy and Offline Use
+
+Both scripts operate locally.
+
+`bookdiff.py` uses only Python's standard library and makes no network requests.
+
+`chaptertimes.ps1` reads local files and writes a local CSV.
+
+Your manuscript does not need to be uploaded to an API or third-party analysis service.
+
+This makes the tools suitable for unpublished manuscripts and local-model experiments where maintaining an entirely local workflow is important.
+
+---
+
+# Reproducibility Notes
+
+When publishing benchmark results, include enough information for another researcher or hobbyist to understand how the number was generated.
+
+For repetition results, report at minimum:
+
+```text
+script/version or commit
+manuscript version
+whether --chapters-only was used
+custom chapter regex, if any
+reported word count
+repetition percentage
+```
+
+For timing results, report at minimum:
+
+```text
+run ID
+hardware
+model and quantization
+BookyAI/Ollama configuration
+number of chapters
+word count
+timestamp methodology
+whether the run was interrupted
+```
+
+When possible, preserve the raw output used to calculate the metric.
+
+A percentage without the underlying text, settings, and methodology is much less useful than a reproducible benchmark.
+
+---
+
+# License
+
+The analysis scripts and repository materials are released under the MIT License unless otherwise noted.
+
+See `LICENSE` for details.
+
+---
+
+# About This Project
+
+"Can AI Write a Book?" is an ongoing experiment examining longform generation with local open-weights language models on consumer hardware.
+
+Rather than evaluating only short benchmark prompts, the project studies what happens when a model is asked to sustain generation across the length of an entire novel.
+
+The project is particularly interested in failure modes that become visible only at long context and long output lengths: repetition, structural drift, runaway length, truncated chapters, reasoning leakage, and increasingly recycled prose.
+
+`chaptertimes.ps1` captures what happened while the book was being generated.
+
+`bookdiff.py repetition` measures what happened inside the generated book.
+
+`bookdiff.py compare` measures what happened to that generated prose after a human began rewriting it.
+
+Together, they provide a lightweight and reproducible way to study a part of AI-assisted writing that is difficult to see in short-form model benchmarks.
+
+
+
 
 # Analyze novel body only (stops at back-matter headings)
 python bookdiff.py repetition "runs/A3b_boo-4070_qwen3-8b_thinking-OFF/4070 - The Affirmation Glitch - qwen3:8b - NO thinking.md" --chapters-only
