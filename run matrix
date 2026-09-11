@@ -1,0 +1,23 @@
+* note: not sure if I am doing this correctly, but here is a raw copy/paste from my master spreadsheet current as of the date of committed changes *
+
+run_id	machine	model_tag	thinking	num_ctx	reported_size_gb	cpu_gpu_split	start_time	end_time	wall_clock_min	status	chapters_completed	chapters_truncated	total_words	total_tokens	tok_per_sec	median_chapter_sec	slowest_chapter_sec	target_adherence_pct	repetition_pct	drift_ch30_vs_ch1	kwh	electricity_usd	bookyai_version	notes
+T0	boo-4070	llama4:16x17b	ON	32768	67 (fits 128GB)	89%/11% CPU/GPU	9/9/2026 16:34	9/9/2026 21:29	294.7	PILOT	30	0	26381	35087	1.98	590	1363.2	29	MEASURE	MEASURE	MEASURE	MEASURE	v1.9.10	PILOT ONLY - written to OneDrive, timestamps may reflect sync. Do not use in results table. Speed degraded ~15% over the run (ch2-11 avg 2.07 tok/s vs ch21-30 avg 1.76). No truncation, so the socket-timeout patch held.
+A1b	backoffice-2060	qwen3:8b	OFF	32768																				
+A2b	trex-3070	qwen3:8b	OFF	32768																				
+A3	boo-4070	qwen3:8b	ON	32768	9.8	100% GPU	9/9/2026 21:59	9/10/2026 3:44	344.2	COMPLETE-DEGENERATE	30	12	333227	443292	21.5	385.9	1363.2	370	90.9	0	MEASURE	MEASURE	v1.9.10	Reasoning trace leaked: bare </think> in ch16. Degenerate from ch1 (77.5% self-rep). 469x 'that seemed to sync with the beat of her heart'.
+A3b	boo-4070	qwen3:8b	OFF	32768	9.8	100% GPU	9/10/2026 13:44	9/10/2026 14:11	26.9	COMPLETE	30	2	89743	119358	68.3	53.5	82.5	100	42.5	0.3	MEASURE	MEASURE	v1.9.11	Body only (ch1-30). Back matter generated manually 2h45m later and is excluded from all figures. Repetition 42.5% is from the whole-file run - rerun with --chapters-only for the body figure. Truncation flag fired on ch2 and ch22; spot-check before trusting. Ch30 shows 8287w in bookdiff vs 2752w in chaptertimes because the export appends back matter to the last chapter.
+A1	backoffice-2060	qwen3:8b	ON	32768	15	73%/27% CPU/GPU				IN PROGRESS													v1.9.10	Reported size 15GB for a 5.2GB model - roughly double the 4070's 9.8GB. Likely unquantised KV cache on Turing. Expect the same degeneration as A3. It froze while generating ch 11, so I updated the program to v1.9.11 and restarted it. 9-11-26 10 am: "Chapter 15 repeated the previous chapter — rewriting it". Also update available so updated to v1.9.12 and restarted. Also updated oLlama since an update was available.
+A2	trex-3070	qwen3:8b	ON	32768	10	41%/59% CPU/GPU				IN PROGRESS													v1.9.10	Expect the same degeneration as A3. Speed should sit between A1 and A3, tracking GPU-resident share rather than VRAM. 9-11 at 10am Chapter 25 repeated the previous chapter — rewriting it - updated to v1.9.12 and restarted also updated ollama
+A4	backoffice-2060	llama3.1:8b																						
+A5	trex-3070	llama3.1:8b																						
+A6	boo-4070	llama3.1:8b																						
+A7	backoffice-2060	muse-glimmer:30b																						
+A8	trex-3070	muse-glimmer:30b																						
+A9	boo-4070	muse-glimmer:30b																						
+B1	trex-3070	laguna-xs-2.1:latest																						
+B2	trex-3070	olmo-3.1:32b																						
+B3	trex-3070	qwen3.8:27b																						
+B4	backoffice-2060	gemma4:26b																						
+C1	boo-4070	llama4:16x17b																						
+C2	trex-3070	llama4:16x17b																						
+C3	backoffice-2060	llama4:16x17b																						
