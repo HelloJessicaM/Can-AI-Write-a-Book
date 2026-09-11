@@ -21,6 +21,8 @@ This ongoing experiment tests multiple model architectures (Dense vs. MoE) acros
 
 > ⚠️ **Status: Active Benchmark.** Raw output folders and `run matrix` entries are committed as runs complete across all three test nodes.
 
+**OS versions differ across nodes and are not controlled.** boo-4070 and backoffice-2060 run Windows 11 Pro 25H2 (build 26200.9445). trex-3070 runs Windows 10 Home 22H2 (build 19045.6466) and is not upgradeable to Windows 11 due to CPU compatibility requirements. Comparisons involving trex-3070 should be read as hardware + OS, not hardware alone.
+
 ---
 
 ## 📁 Repository Structure
