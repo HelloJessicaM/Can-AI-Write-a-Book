@@ -24,9 +24,18 @@ if ($files.Count -lt 2) {
     exit 1
 }
 
+# Decorative trailing characters: emoji (stored as UTF-16 surrogate pairs, \p{Cs}),
+# dingbats, arrows, symbols, variation selectors, ZWJ, skin-tone modifiers.
+$DECOR  = '\p{So}\p{Cs}\p{Sk}\p{Sm}\u2190-\u2BFF\uFE0F\u200D\u2022\u00B7'
+$DECOR_END   = "[$DECOR]`$"
+$DECOR_STRIP = "[$DECOR\s]+`$"
+
 $prev = $null
 $rows = foreach ($f in $files) {
-    $text  = Get-Content $f.FullName -Raw
+    # -Encoding UTF8 is required: Windows PowerShell 5.1 otherwise reads UTF-8 files
+    # as the system ANSI codepage, turning every emoji and curly quote into mojibake
+    # letters. That breaks the truncation test and corrupts the word count.
+    $text  = Get-Content $f.FullName -Raw -Encoding UTF8
     $words = ($text -split '\s+' | Where-Object { $_ }).Count
 
     # Ollama's own rule of thumb: ~1.33 tokens per English word
@@ -38,9 +47,16 @@ $rows = foreach ($f in $files) {
     $tps = $null
     if ($secs -and $secs -gt 0) { $tps = [math]::Round($tokens / $secs, 2) }
 
-    # A chapter that stops without terminal punctuation is very likely truncated
-    $tail = ($text.TrimEnd() -split '' | Select-Object -Last 1)
-    $truncated = if ($text.TrimEnd() -match '[.!?"''\)\]]$') { "no" } else { "YES" }
+    # Truncation heuristic.
+    # Decorative endings (emoji, dingbats, symbols) are deliberate, not cut-off text,
+    # so strip them before testing for terminal punctuation. \p{Cs} catches the
+    # surrogate pairs that astral-plane emoji are stored as in UTF-16.
+    $tail     = $text.TrimEnd()
+    $endsEmoji = if ($tail -match $DECOR_END) { "YES" } else { "no" }
+    $stripped = $tail -replace $DECOR_STRIP, ''
+    $truncated = if ($stripped -match '[.!?\"''\)\]\u2019\u201D\u2026]$') { "no" }
+                 elseif ($endsEmoji -eq "YES") { "no" }
+                 else { "YES" }
 
     $prev = $f.LastWriteTime
 
@@ -52,7 +68,8 @@ $rows = foreach ($f in $files) {
         Words     = $words
         Tokens    = $tokens
         TokPerSec = $tps
-        Truncated = $truncated
+        Truncated     = $truncated
+        EndsWithEmoji = $endsEmoji
     }
 }
 
@@ -66,6 +83,7 @@ $span    = ([datetime]$rows[-1].Finished - [datetime]$rows[0].Finished).TotalMin
 $median  = ($timed | Sort-Object Seconds)[[int]($timed.Count / 2)].Seconds
 $slowest = ($timed | Sort-Object Seconds -Descending | Select-Object -First 1).Seconds
 $cut     = ($rows | Where-Object { $_.Truncated -eq 'YES' }).Count
+$emoji   = ($rows | Where-Object { $_.EndsWithEmoji -eq 'YES' }).Count
 
 Write-Host ""
 Write-Host "==================== $RunId ====================" -ForegroundColor Cyan
@@ -75,6 +93,7 @@ Write-Host ("  total words           : {0:N0}" -f $totalW)
 Write-Host ("  overall tok/sec       : {0:N2}" -f ($(if ($span) { $totalT / ($span * 60) } else { 0 })))
 Write-Host ("  median chapter        : {0}s" -f $median)
 Write-Host ("  slowest chapter       : {0}s" -f $slowest)
+Write-Host ("  ends with emoji       : {0}" -f $emoji) -ForegroundColor Gray
 Write-Host ("  likely truncated      : {0}" -f $cut) -ForegroundColor $(if ($cut) { 'Yellow' } else { 'Green' })
 Write-Host ("  target adherence      : {0:N0}% of 90,000" -f ($totalW / 90000 * 100))
 Write-Host "================================================" -ForegroundColor Cyan
