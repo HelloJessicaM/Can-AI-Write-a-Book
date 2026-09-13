@@ -3,7 +3,7 @@
 
 This repository contains the raw generated manuscripts, custom diagnostic scripts, experiment matrix, and public control prompts for the **"Can AI Write a Book?"** benchmarking series by Jessica K. Murray.
 
-📖 **Read the full pillar write-up:** [Can AI Write a Book? Measuring Local Models on 3 Old Computers]([https://jessicakmurray.com/can-ai-write-a-book/](https://jessicakmurray.com/can-ai-write-a-book/))
+📖 **Read the full pillar write-up:** [Can AI Write a Book? Measuring Local Models on 3 Old Computers ([https://jessicakmurray.com/can-ai-write-a-book/](https://jessicakmurray.com/can-ai-write-a-book/))
 
 ---
 
