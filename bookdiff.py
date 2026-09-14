@@ -21,6 +21,14 @@ USAGE
 
       python bookdiff.py compare ai_draft.txt edited.txt --out report.txt
 
+  Measure the narrative only, with front and back matter removed:
+
+      python bookdiff.py repetition my_book.txt --chapters-only
+
+  Check a phrase a beta reader claims is overused:
+
+      python bookdiff.py repetition my_book.txt --count "soft glow" --count "the pull to stay"
+
   If your chapters aren't detected, tell it what they look like:
 
       python bookdiff.py repetition book.txt --chapter-regex "^CHAPTER"
@@ -41,6 +49,13 @@ REPETITION - the share of 10-word windows in a book that appear more than
              on a book you trust to set your own baseline, then compare.
              Deliberate refrains and repeated liturgy will show up here too,
              so read the phrase list before concluding anything.
+
+SHORT TICS - REPETITION uses a 10-word window, so it is blind to the
+             two-, three- and four-word habits that readers actually
+             notice. The short-phrase section catches those and reports
+             them as a rate per 10,000 words, so books of different
+             lengths can be compared. A model can score low on REPETITION
+             and still say "soft glow" every thousand words.
 
 DRIFT      - how much a late chapter overlaps chapter one. Overlap that
              climbs toward the end means the model started recycling.
@@ -128,6 +143,16 @@ def ngrams(word_list, n=WINDOW):
     return [tuple(word_list[i:i + n]) for i in range(len(word_list) - n + 1)]
 
 
+def chapter_marks(lines, custom=None):
+    """(line indices of chapter headings, pattern used). Needs 3+ to accept."""
+    for pat in ([custom] if custom else DEFAULT_CHAPTER_PATTERNS):
+        rx = re.compile(pat)
+        marks = [i for i, ln in enumerate(lines) if rx.match(ln.strip())]
+        if len(marks) >= 3:
+            return marks, pat
+    return [], None
+
+
 def split_chapters(text, custom=None):
     """Prefer real markdown headings; fall back to bare 'Chapter N' lines."""
     lines = normalize(text).split('\n')
@@ -143,6 +168,49 @@ def split_chapters(text, custom=None):
                             '\n'.join(lines[start + 1:end])))
             return out
     return [('(whole file)', text)]
+
+
+FUNCTION_WORDS = set("""a an and as at be been but by did do for from had has have
+he her hers him his i if in is it its me my not of on or she so that the their them
+then there they this to up was we were what when which who will with you your it's
+had been would could should there's""".split())
+
+
+def body_only(raw, custom=None):
+    """Front and back matter removed: the narrative and nothing else.
+
+    Truncating the raw text BEFORE splitting is what makes this correct.
+    Per-chapter endnote entries carry their own 'Chapter N' headings, so a
+    splitter run over the whole export detects them as chapters and they
+    survive any trim applied inside chapters.
+
+    Returns (body_text, dropped_front_words, dropped_back_words).
+    """
+    lines = raw.split('\n')
+    marks, _ = chapter_marks(lines, custom)
+    if not marks:
+        return raw, 0, 0
+    start = marks[0]
+    end = next((i for i in range(start, len(lines))
+                if BACK_MATTER.match(lines[i].strip())), len(lines))
+    body = '\n'.join(lines[start:end]).strip() + '\n'
+    return (body,
+            len(words('\n'.join(lines[:start]))),
+            len(words('\n'.join(lines[end:]))))
+
+
+def has_back_matter(raw):
+    return any(BACK_MATTER.match(ln.strip()) for ln in raw.split('\n'))
+
+
+def overlaps(a, b, n, k):
+    """True if the two n-grams share k+ consecutive tokens (same passage)."""
+    for off in range(-(n - k), n - k + 1):
+        x = a[max(0, off):n + min(0, off)]
+        y = b[max(0, -off):n + min(0, -off)]
+        if len(x) >= k and x == y:
+            return True
+    return False
 
 
 def pct(x):
@@ -220,24 +288,30 @@ def compare(ai_path, edited_path, chapter_regex, out):
     emit(L, out)
 
 
-def repetition(path, chapter_regex, out, chapters_only=False):
+def repetition(path, chapter_regex, out, chapters_only=False, count_phrases=None):
     raw = read(path)
+    note = None
+    if chapters_only:
+        raw, front, back = body_only(raw, chapter_regex)
+        if front or back:
+            note = (f"  Front/back matter removed: {front:,} words before "
+                    f"chapter 1, {back:,} words after the last chapter.")
+        else:
+            note = "  --chapters-only: nothing to remove, file is already body text."
+    elif has_back_matter(raw):
+        note = ("  NOTE: this file contains back matter and you did not pass "
+                "--chapters-only.\n  Back matter is less repetitive than the "
+                "novel, so this number reads low.")
+
     chs = split_chapters(raw, chapter_regex)
-    if chapters_only and chs[0][0] != '(whole file)':
-        trimmed = []
-        for title, body in chs:
-            lines = body.split('\n')
-            cut = next((i for i, ln in enumerate(lines)
-                        if BACK_MATTER.match(ln.strip())), None)
-            trimmed.append((title, '\n'.join(lines[:cut] if cut else lines)))
-        raw = '\n'.join('## Chapter %d: %s\n%s' % (i, t, b)
-                        for i, (t, b) in enumerate(trimmed, 1))
-        chs = split_chapters(raw, chapter_regex)
 
     L = ["=" * 72,
          "REPETITION REPORT",
          f"  {path}   ({len(words(raw)):,} words, {len(chs)} chapters)",
          "=" * 72]
+    if note:
+        L.append("")
+        L.append(note)
 
     all_ng = ngrams(words(raw))
     counts = Counter(all_ng)
@@ -254,18 +328,9 @@ def repetition(path, chapter_regex, out, chapters_only=False):
         if g not in first_pos:
             first_pos[g] = i
 
-    def overlaps(a, b, k=5):
-        """True if a and b share k+ consecutive tokens (i.e. same passage)."""
-        for off in range(-(WINDOW - k), WINDOW - k + 1):
-            x = a[max(0, off):WINDOW + min(0, off)]
-            y = b[max(0, -off):WINDOW + min(0, -off)]
-            if len(x) >= k and x == y:
-                return True
-        return False
-
     picked = []
     for c, g in sorted(((c, g) for g, c in counts.items() if c > 2), reverse=True):
-        if any(overlaps(g, p) for _, p in picked):
+        if any(overlaps(g, p, WINDOW, 5) for _, p in picked):
             continue
         picked.append((c, g))
         if len(picked) == 10:
@@ -285,6 +350,56 @@ def repetition(path, chapter_regex, out, chapters_only=False):
         L.append("  how much of the text the passage occupies. 'find' is what a text")
         L.append("  search returns. For one unbroken repeating run the first is roughly")
         L.append("  ten times the second; a smaller ratio means the run is broken up.")
+
+    # short tics: the 10-word window cannot see them, readers can
+    N4 = 4
+    total_w = len(words(raw))
+    g4 = ngrams(words(raw), N4)
+    positions = {}
+    for i, g in enumerate(g4):
+        positions.setdefault(g, []).append(i)
+
+    # suppress phrases that sit inside a phrase already reported, by position
+    covered = set()
+    short = []
+    for c, g in sorted(((len(v), k) for k, v in positions.items() if len(v) >= 5),
+                       reverse=True):
+        if all(t in FUNCTION_WORDS for t in g):
+            continue
+        inside = sum(1 for i in positions[g]
+                     if any(j in covered for j in range(i, i + N4)))
+        if inside > len(positions[g]) / 2:
+            continue
+        for i in positions[g]:
+            covered.update(range(i, i + N4))
+        short.append((c, g))
+        if len(short) == 10:
+            break
+
+    if short:
+        L.append("\n  Recurring short phrases (below the 10-word window):")
+        L.append(f"  {'count':>7} {'per 10k words':>14}   phrase")
+        L.append("  " + "-" * 68)
+        for c, g in short:
+            L.append(f"  {c:>7} {c / total_w * 10000:>14.1f}   "
+                     f"{surface(raw, positions[g][0], N4)}")
+        L.append("")
+        L.append("  A book can score low on the headline number and still repeat a")
+        L.append("  four-word habit every few hundred words. Compare the rate column")
+        L.append("  against your own baseline, not against zero.")
+
+    if count_phrases:
+        flat = re.sub(r'\s+', ' ', normalize(raw)).lower()
+        L.append("\n  Phrase counts you asked for:")
+        L.append(f"  {'count':>7} {'per 10k words':>14}   phrase")
+        L.append("  " + "-" * 68)
+        for phrase in count_phrases:
+            key = re.sub(r'\s+', ' ', normalize(phrase)).lower().strip()
+            c = flat.count(key)
+            L.append(f"  {c:>7} {c / total_w * 10000:>14.1f}   {phrase}")
+        L.append("")
+        L.append("  Use this to check a claim before you believe it. A beta reader,")
+        L.append("  human or otherwise, can be confidently wrong about frequency.")
 
     if len(chs) > 2:
         first_ng = set(ngrams(words(chs[0][1])))
@@ -319,7 +434,10 @@ def main():
     r = sub.add_parser('repetition', help='how much one book repeats itself')
     r.add_argument('book')
     r.add_argument('--chapters-only', action='store_true',
-                   help='ignore front/back matter; measure the narrative only')
+                   help='strip front and back matter; measure the narrative only')
+    r.add_argument('--count', action='append', metavar='PHRASE',
+                   help='count an exact phrase (repeatable) - use it to check '
+                        'a claim that something is overused')
 
     for s in (c, r):
         s.add_argument('--chapter-regex', default=None,
@@ -330,7 +448,7 @@ def main():
     if a.mode == 'compare':
         compare(a.ai_draft, a.edited, a.chapter_regex, a.out)
     else:
-        repetition(a.book, a.chapter_regex, a.out, a.chapters_only)
+        repetition(a.book, a.chapter_regex, a.out, a.chapters_only, a.count)
 
 
 if __name__ == '__main__':
