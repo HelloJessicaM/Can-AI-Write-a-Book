@@ -52,14 +52,22 @@ The experiments use BookyAI as the longform generation wrapper and Ollama as the
 
 ## Repository Tools
 
-The repository includes two small analysis utilities:
+The repository includes three small analysis utilities:
 
 | Script             | Purpose                                                                                 | Platform              |
 | ------------------ | --------------------------------------------------------------------------------------- | --------------------- |
+| `runqc.py`         | Start here. Runs every check on a finished book in one command and writes the timing    | Windows (needs        |
+|                    | CSV, body file, repetition report, QC checklist, matrix row and per-chapter detail      | PowerShell for timing)| 
 | `bookdiff.py`      | Measures internal repetition, chapter drift, and AI-draft carryover after human editing | Windows, macOS, Linux |
 | `chaptertimes.ps1` | Reconstructs approximate chapter generation times from BookyAI output-file timestamps   | Windows PowerShell    |
 
-Neither script sends manuscript text anywhere. Analysis is performed locally.
+`runqc.py` calls the other two. If you are logging a benchmark run, use it. If
+you are analysing a manuscript that did not come from this pipeline, use
+`bookdiff.py` directly.
+None of these scripts send manuscript text anywhere. Analysis is performed
+locally.
+See `CHANGELOG.md` for what changed and when, including the cases where a fix
+altered a previously published figure.
 
 ---
 
@@ -117,6 +125,112 @@ No PowerShell modules or other dependencies are required.
 
 The timing script should ideally be run immediately after a generation completes, before editing the chapter files or otherwise doing anything that might modify their timestamps.
 
+---
+# `runqc.py`
+`runqc.py` is the front door. It runs the whole post-generation checklist in
+order, in one command, and writes everything needed to log a benchmark run.
+It exists because doing these steps by hand produced eight mislabelled runs in
+the first six weeks of this project. Every output it writes is stamped with the
+run ID you supply, so a file can't end up attached to the wrong run.
+Requirements
+Python 3.8 or newer, no third-party libraries
+`bookdiff.py` in the same folder as `runqc.py`
+`chaptertimes.ps1` in the same folder, and Windows PowerShell — unless you
+pass `--timings` with an existing CSV
+`makebody.py` in the same folder, only if you use `--export`
+Basic use
+From anywhere, pointed at a finished BookyAI run folder:
+```bash
+python runqc.py A3-8k "C:\path\to\20261003152816_a3_8k_backoffice_2060_qwen3_8b"
+```
+# What it does, in order
+Timing. Runs `chaptertimes.ps1` against the book folder and writes
+`<run_id>_timings.csv`. Skipped if you pass `--timings`.
+Fallback audit. Compares each chapter's tokens-per-second against the
+run's median and flags large outliers, which can indicate the wrapper
+silently generated a chapter with a cloud model. Read the warning in the
+Known Issues section before trusting this — it fails in both directions
+when a run has many retries.
+Body assembly. Builds `<run_id>_body.md` from the individual
+`chapter_NN.md` files, normalising mixed heading shapes as it goes. This is
+the file every judge reads and every repetition number is computed from.
+Assembling from the chapter files rather than the wrapper's own export is
+deliberate: the export includes front and back matter, and an earlier version
+of this pipeline once measured an `outline.md` by mistake.
+Repetition. Runs `bookdiff.py repetition --chapters-only` on the body and
+writes `<run_id>_repetition.txt`.
+Checklist. Writes `<run_id>_checklist.md`, a dated to-do list of the
+steps a script can't do — the wrapper's own quality review, reading
+`ollama ps` for the memory footprint and CPU/GPU split, confirming the engine
+label on every chapter, and the external quality instruments.
+Matrix row. Writes `<run_id>_matrixrow.csv`, appends the same row to an
+append-only `matrix_rows.csv` ledger (deduplicated by run ID), and prints the
+row tab-separated for pasting straight into a spreadsheet.
+Per-chapter detail. Writes `<run_id>_chapter_detail.csv` with one row per
+chapter: words, overlap with chapter one, and self-repetition. This is what
+makes per-chapter metrics computable in a spreadsheet instead of by hand.
+# Options
+Option	Meaning
+`--timings PATH`	Use an existing chaptertimes CSV instead of running it. Required on macOS and Linux.
+`--export PATH`	Measure this exported manuscript instead of assembling from the chapter files. Needs `makebody.py`.
+`--out DIR`	Where to write outputs (default: current directory)
+`--num-ctx N`	The context window this run used
+`--thinking VALUE`	Value for the thinking column (default `OFF`)
+`--machine NAME`	Machine label, e.g. `boo-4070`
+`--model TAG`	Model tag, e.g. `gemma4:26b`
+# How `num_ctx` is determined
+Context window is the single setting most likely to be recorded wrong, and a
+wrong value silently invalidates any comparison built on it. So:
+If you pass `--num-ctx`, that value is used.
+Otherwise it is read from the run ID: `A3-8k` → 8192, `L1-16kr2-4070` →
+16384, `L3-128k-backoffice` → 131072.
+If the run ID says nothing, the cell is left blank and the script says so.
+It never falls back to a default. A blank cell is honest; a guessed `32768` is a
+lie that looks like data.
+Note that `8k` means `8192`, not `8000`. If you set `8000` in one tool and
+`8192` in another, the lower value wins silently and your comparison has a
+confound. Confirm what actually loaded with `ollama ps` — the `CONTEXT` column
+shows the real value.
+# Naming runs
+Put the context in the run ID with a leading separator and a `k`:
+```
+K1-8k        G1-16k-r2        L3-128k-backoffice-gemma412b
+```
+Avoid `K1-128-4070` (no `k`, so the context can't be inferred) and avoid putting
+a bare number that could be read as a context where it isn't one.
+# Example output
+```
+A3-8k
+============================================================
+  -> chaptertimes
+  30 chapters, 60,062 words, 1128.3 min (18.8 h), 1.14 tok/s
+  !! 8 chapter(s) far above the median rate of 1.12 tok/s:
+       chapter_03.md  5.21 tok/s  (4.7x median)
+       ...
+  -> assembled .\A3-8k_body.md from 30 chapter files
+  -> bookdiff repetition --chapters-only
+  repetition: 19.0%
+  -> checklist: .\A3-8k_checklist.md
+  num_ctx 8192 (read from the run id)
+  -> appended to matrix_rows.csv
+  -> A3-8k_chapter_detail.csv (30 chapters) for the chapter_detail tab
+
+------------------------------------------------------------
+Paste into the experiment matrix (fill size, split, version):
+
+A3-8k   OFF   8192   ...
+------------------------------------------------------------
+```
+A note on reading the output
+Three columns need interpreting rather than trusting:
+`slowest_chapter_sec` includes chapter one's interval, which can be a
+meaningless large number. If it exceeds the run's wall clock, that's what
+happened.
+`chapters_truncated` is a heuristic with four known false-positive
+classes. A flag on a normal-length chapter is usually a formatting artifact;
+a flag on a runaway chapter is usually real.
+The fallback audit is unreliable in runs with many retries. See Known
+Issues.
 ---
 
 # `bookdiff.py`
@@ -302,6 +416,96 @@ This measures repeated 10-word windows **within that individual chapter**.
 This can help distinguish whole-book repetition from a particular chapter that became unusually repetitive.
 
 ---
+# Recurring Short Phrases
+The headline number uses a 10-word window, so it is blind to the two-, three-
+and four-word habits readers actually notice. The short-phrase section catches
+those and reports them as a rate per 10,000 words, so books of different lengths
+can be compared:
+```text
+  Recurring short phrases (below the 10-word window):
+    count  per 10k words   phrase
+  --------------------------------------------------------------------
+      183           25.1   The algorithm of grace
+       71            9.7   was no longer just
+       62            8.5   She looked at the
+```
+A model can score 0.5% on the headline number and still repeat a four-word
+habit every four hundred words. Compare the rate column against your own
+baseline, not against zero.
+Motif Saturation
+The tier below short phrases: a single image that recurs all book long.
+```text
+ # Motif saturation (recurring images, measured over 30 chapters):
+    count  per 10k  chapters   phrase
+  --------------------------------------------------------------------
+      324     44.5     30/30   the algorithm
+      233     32.0     29/30   the sanctuary
+      199     27.3     30/30   code
+  ....................................................................
+      351     48.2     30/30   Maya   (name/place)
+  ....................................................................
+       37      5.1      4/30   the "Signal   <- CONCENTRATED
+```
+`"golden thread"` 110 times in 72,000 words shares no 10-word window with itself
+and is not a four-word habit, so neither number above sees it — but a reader
+meets it every other page.
+Read the `chapters` column first. A phrase in nearly every chapter is a
+style tic: the model's voice, and it will be in every book that model writes.
+The same count inside two or three chapters is a runaway passage, which is a
+different problem with a different fix. Rows concentrated in a small number of
+chapters are listed separately as `CONCENTRATED` whatever their count, because
+ranking on count alone loses them behind ordinary vocabulary.
+# Things to know about this section specifically:
+Words sitting inside a repeated 10-word window are excluded, so this measures
+the repetition the headline number cannot see rather than restating it. The
+report prints how much it skipped.
+Singular and plural are merged here and nowhere else in the report.
+Names and places are separated out below the dotted line.
+Frequent everyday words (`hand`, `light`, `room`) are filtered out of
+single-word rows, because ranking on count alone puts `chair` above `mirror`.
+`--motif-all` includes them.
+`--motif-rate PER10K` changes the floor. Default `1.5`, about once every 6,700
+words. Lower it to see more.
+```bash
+python bookdiff.py repetition manuscript.md --chapters-only --motif-rate 0.8
+```
+# Frame Breaks
+A check for prose where the narrator stops telling the story and starts
+describing the document it is inside:
+```text
+  Frame breaks: 6
+    line  kind              text
+  --------------------------------------------------------------------
+    1018  chapter ref       ...the "pulse" she had identified in Chapter 7.
+    1224  meta narration    ...And she was the author of the next chapter.
+```
+Five categories are detected: `chapter ref`, `meta narration`, `production note`, `model voice` and `addresses reader`. A novel should not know it has
+chapter numbers; a chapter should not contain `Word count: 2,450`; and a
+chapter that opens `"Since there was no preceding text provided…"` is the
+assistant answering a prompt rather than the narrator telling a story.
+Chapter headings and everything from the first back-matter heading onward are
+excluded, so a hit is prose. Line numbers are real file lines, so you can jump
+straight there.
+Measured precision on 23 hits across five real manuscripts is 95%. The
+remaining false-positive class is a character legitimately reading a chapter of
+a book, which this check cannot distinguish from a model slip. Read the hits.
+Verifying a Frequency Claim
+`--count` takes an exact phrase and reports its rate. Repeatable:
+```bash
+python bookdiff.py repetition manuscript.md --count "soft glow" --count "the pull to stay"
+```
+```text
+  Phrase counts you asked for:
+    count  per 10k words   phrase
+  --------------------------------------------------------------------
+       41            5.7   soft glow
+        2            0.3   the pull to stay
+```
+Built for checking a claim before believing it. A beta reader, human or
+otherwise, can be confidently wrong about frequency — in this project an AI
+judge reported a motif "roughly 110 times" that the script found 324 times, and
+reported another at a tenth of its real rate.
+```
 
 # Analyzing Narrative Chapters Only
 
@@ -1070,43 +1274,34 @@ Ollama version
 
 Allow the BookyAI run to finish without modifying completed chapter files.
 
-### 3. Capture timing immediately
-
-From the original chapter-output directory:
-
-```powershell
-& "C:\path\to\Can-AI-Write-a-Book\chaptertimes.ps1" -RunId A3b
-```
-
-Preserve:
-
-```text
-A3b_timings.csv
-```
-
-with the run.
-
-### 4. Assemble or export the manuscript
-
-Create the complete raw Markdown or text manuscript without rewriting it.
-
-### 5. Measure repetition
-
+### 3. Run the QC pipeline immediately
+From the original chapter-output directory, before editing anything:
 ```bash
-python bookdiff.py repetition "raw-manuscript.md" --chapters-only --out repetition.txt
+python "C:\path\to\Can-AI-Write-a-Book\runqc.py" A3b "C:\path\to\bookyai\output\run-folder"
 ```
+This captures the timing CSV while the file timestamps are still trustworthy,
+assembles the narrative body, measures repetition, writes a QC checklist, and
+emits a matrix row and per-chapter detail rows.
 
-### 6. Inspect repeated passages
+### 4. Record what the scripts can't see
+Open the generated `<run_id>_checklist.md` and work through it. The items that
+need a human are:
+the wrapper's own quality review, if it has one
+`ollama ps` while the model is loaded — the reported size, the CPU/GPU split,
+and the `CONTEXT` value
+confirming the engine label on every chapter, which is the only reliable check
+against a cloud model having silently written one
+the external quality instruments
 
-Do not rely only on the percentage.
+### 5. Read the repetition report, not just the percentage
+Review the repeated-passages list, the short-phrase rates, the motif section's
+`chapters` column, and the frame-break hits. The headline number and the
+motif section measure different failures, and a book can be clean on one and
+badly saturated on the other.
 
-Review the repeated-passages list to distinguish genuine model looping from intentional recurring language.
-
-### 7. Preserve the raw output
-
-Never overwrite the original generated manuscript if you intend to study later editing.
-
-Keep it as an immutable baseline.
+### 6. Preserve the raw output
+Never overwrite the original generated manuscript if you intend to study later
+editing. Keep it as an immutable baseline.
 
 ### 8. Edit a copy
 
